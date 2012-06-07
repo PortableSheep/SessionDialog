@@ -1,0 +1,37 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+        "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+    <title>Session Timer Example</title>
+    <link rel="stylesheet" type="text/css" href="jq/css/ui-lightness/jquery-ui-1.8.16.custom.css">
+    <script type="text/javascript" src="jq/jquery-1.7.1.min.js"></script>
+    <script type="text/javascript" src="jq/jquery-ui-1.8.16.custom.min.js"></script>
+    <script type="text/javascript" src="jquery.sessiondialog.js"></script>
+    <script type="text/javascript">
+		$(function() {
+			$("#session-timeout").sessiondialog({
+				timeoutInterval: 60000,
+				height: 340,
+				width: 400,
+				modal: true,
+				autoOpen: false,
+				countDownElement: $('#spanSeconds'),
+				url: 'http://www.google.com',
+				buttons: [{
+					text: "Extend Time",
+					click: function() {
+						$(this).sessiondialog('close');
+					},
+					extendTime: true
+				}]
+			});
+		});
+    </script>
+</head>
+<body>
+	<div id="session-timeout" title="Security Logout Warning">
+		<p>For your security, you will be logged out in <span id="spanSeconds" style="color: red;"></span> seconds due to inactivity.</p>
+	</div>
+	<div>Session timeout will occur in 1 minutes.</div>
+</body>
+</html>
