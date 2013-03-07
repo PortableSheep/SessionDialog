@@ -1,0 +1,40 @@
+{
+	"name": "sessiondialog",
+	"title": "SessionDialog - Session expiration warning dialog widget for jQuery UI.",
+	"description": "A jQuery UI widget that extends the dialog widget to handle session expiration warnings.",
+	"keywords": [
+		"session",
+		"authentication",
+		"timeout"
+	],
+	"version": "1.1.0",
+	"author": {
+		"name": "Michael Gunderson",
+		"url": "https://github.com/PortableSheep"
+	},
+	"maintainers": [
+		{
+			"name": "Michael Gunderson",
+			"email": "michael@portablesheep.com",
+			"url": "https://github.com/PortableSheep"
+		}
+	],
+	"licenses": [
+		{
+			"type": "MIT",
+			"url": "https://raw.github.com/PortableSheep/SessionDialog/master/MIT-LICENSE.txt"
+		},
+		{
+			"type": "GPLv2",
+			"url": "https://raw.github.com/PortableSheep/SessionDialog/master/GPL-LICENSE.txt"
+		}
+	],
+	"homepage": "https://github.com/PortableSheep/SessionDialog",
+	"bugs": "https://github.com/PortableSheep/SessionDialog/issues",
+	"docs": "https://github.com/PortableSheep/SessionDialog/wiki",
+	"download": "https://github.com/PortableSheep/SessionDialog/tags",
+	"dependencies": {
+		"jquery": ">=1.9",
+		"jqueryui": ">=1.10"
+	}
+}
