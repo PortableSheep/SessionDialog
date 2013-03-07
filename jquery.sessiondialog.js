@@ -26,7 +26,7 @@
             countDownTimeout: 20, //How many seconds to countdown.
             countDownElement: null, //The element where the countdown text will be rendered.
             resetOnActivity: false, //Reset on mouse/keyboard activity?
-            multiTabSync: false, //Use a cookie to track activity on other tabs, to avoid timing out on one while active in another in the same session.
+            multiTabSync: true, //Use a cookie to track activity on other tabs, to avoid timing out on one while active in another in the same session.
             syncCookie: {
                 expires: null,
                 path: null,
@@ -74,23 +74,12 @@
                 }
             }
         },
-        /*   _______                     __    ______     __                    __  __ __             ____
-            /_  __(_)_ _  ___ ___  __ __/ /_ _/_/  _/__  / /____ _____  _____ _/ / / // /__ ____  ___/ / /__ _______
-             / / / /  ' \/ -_) _ \/ // / __//_/_/ // _ \/ __/ -_) __/ |/ / _ `/ / / _  / _ `/ _ \/ _  / / -_) __(_-<
-            /_/ /_/_/_/_/\__/\___/\_,_/\__/_/ /___/_//_/\__/\__/_/  |___/\_,_/_/ /_//_/\_,_/_//_/\_,_/_/\__/_/ /___/
-         */
-        _syncTick: function() {
-        },
-        _timeoutHandler: function() {
-        },
-        _countdownHandler: function() {
-        },
         /*   ______             __    _             ____              __    __ __             ____
             /_  __/______ _____/ /__ (_)__  ___ _  / __/  _____ ___  / /_  / // /__ ____  ___/ / /__ _______
              / / / __/ _ `/ __/  '_// / _ \/ _ `/ / _/| |/ / -_) _ \/ __/ / _  / _ `/ _ \/ _  / / -_) __(_-<
             /_/ /_/  \_,_/\__/_/\_\/_/_//_/\_, / /___/|___/\__/_//_/\__/ /_//_/\_,_/_//_/\_,_/_/\__/_/ /___/
                                           /___/
-         */
+        */
         _trackClickHandler: function() {
         },
         _keyUpHandler: function() {
@@ -104,6 +93,7 @@
             if (this.options.multiTabSync && this._syncInterval) {
                 clearInterval(this._syncInterval);
             }
+            this._cookie('multiTabSync', { expired: true });
             this._clearTimers();
             if (this.options.url) {
                 window.location.replace(this.options.url);
@@ -137,8 +127,8 @@
             }
         },
         _extendSession: function() {
-        //     this._trigger('extendSession', this);
-        //     this._resetSession();
+            this._trigger('extendSession', this);
+            this._resetSession();
         },
         _resetSession: function(fromTracking) {
             this._clearTimers();
@@ -150,6 +140,22 @@
             //     this._stopTrackingEvents();
             //     this._setTrackingEvents();
             // }
+        },
+        _startSync: function() {
+            var cookie = this._cookie('multiTabSync');
+            if (!cookie || !$.isPlainObject(cookie)) {
+                cookie = {
+                    expired: false
+                };
+            }
+            this._cookie('multiTabSync', cookie);
+            this._syncInterval = setInterval($.proxy(function() {
+                var tmp = this._cookie('multiTabSync');
+                if (tmp.expired) {
+                    this._expireAndRedirect();
+                }
+                // console.log(this._cookie('multiTabSync'));
+            }, this), 1000);
         },
         /*   _      __              _
             | | /| / /__ ________  (_)__  ___ _
@@ -170,7 +176,7 @@
                     clearInterval(this._countDownInterval);
                     this._trigger('sessionTimeout', this);
                     this.close();
-                    // this._expireAndRedirect();
+                    this._expireAndRedirect();
                     this._resetSession();
                 }
                 tick--;
