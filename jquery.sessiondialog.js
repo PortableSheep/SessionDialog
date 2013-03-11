@@ -14,7 +14,7 @@
       _\ \/ -_|_-<(_-</ / _ \/ _ \/ // / / _ `/ / _ \/ _ `/
      /___/\__/___/___/_/\___/_//_/____/_/\_,_/_/\___/\_, /
                                                     /___/
-    v1.1 - http://portablesheep.github.com/SessionDialog
+    v1.1.0 - http://portablesheep.github.com/SessionDialog
     jQuery UI widget for showing user session expiration warning and count down before logout.
     Copyright 2012, Michael Gunderson - Dual licensed under the MIT or GPL Version 2 licenses. Same as jQuery.
  */
@@ -32,9 +32,11 @@
                 path: null,
                 domain: null,
                 secure: false
-            }
+            },
+            activityInterval: 2000,
+            activityTimeout: 15 //The number of seconds between detected activity before the user is considered inactive.
         },
-        _mainTimeout: null, _countDownInterval: null, _syncInterval: null,
+        _mainTimeout: null, _countDownInterval: null, _syncInterval: null, _activityInterval: null, _lastActivity: null, _isIdle: false,
         _$document: $(document), _eventNamespace: '.sessUsrEvents' + Math.floor(Math.random() * 100),
         /*    _____          __    _       __  ___    __  __           __
              / ___/__  ___  / /__ (_)__   /  |/  /__ / /_/ /  ___  ___/ /__
@@ -75,49 +77,53 @@
             }
         },
         /*   ______             __    _             ____              __    __ __             ____
-            /_  __/______ _____/ /__ (_)__  ___ _  / __/  _____ ___  / /_  / // /__ ____  ___/ / /__ _______
-             / / / __/ _ `/ __/  '_// / _ \/ _ `/ / _/| |/ / -_) _ \/ __/ / _  / _ `/ _ \/ _  / / -_) __(_-<
-            /_/ /_/  \_,_/\__/_/\_\/_/_//_/\_, / /___/|___/\__/_//_/\__/ /_//_/\_,_/_//_/\_,_/_/\__/_/ /___/
+            /_  __/______ _____/ /__ (_)__  ___ _  / __/  _____ ___  / /_  / // /__ ____  ___/ / /__ ____
+             / / / __/ _ `/ __/  '_// / _ \/ _ `/ / _/| |/ / -_) _ \/ __/ / _  / _ `/ _ \/ _  / / -_) __/
+            /_/ /_/  \_,_/\__/_/\_\/_/_//_/\_, / /___/|___/\__/_//_/\__/ /_//_/\_,_/_//_/\_,_/_/\__/_/
                                           /___/
         */
-        _trackClickHandler: function() {
-        },
-        _keyUpHandler: function() {
+        _trackActivityHandler: function() {
+            this._lastActivity = new Date().getTime();
         },
         /*     __  ___    __  __           __
               /  |/  /__ / /_/ /  ___  ___/ /__
              / /|_/ / -_) __/ _ \/ _ \/ _  (_-<
             /_/  /_/\__/\__/_//_/\___/\_,_/___/
         */
-       _expireAndRedirect: function() {
+        _resetCookie: function() {
+            this._cookie('multiTabSync', {
+                expired: false,
+                showing: false
+            });
+        },
+        _expireAndRedirect: function() {
             if (this.options.multiTabSync && this._syncInterval) {
                 clearInterval(this._syncInterval);
             }
             this._cookie('multiTabSync', { expired: true });
             this._clearTimers();
+            this._stopTracking();
             if (this.options.url) {
-                window.location.replace(this.options.url);
+                // window.location.replace(this.options.url);
             }
-       },
+        },
         // _hideTimeout: function() {
         //     this._trigger('hideTimeoutWarning', this);
         //     this.close();
         // },
-        // _setTrackingEvents: function() {
-        //     if (this.options.resetOnActivity) {
-        //         var self = this;
-        //         this._$document.on('click' + this._eventNamespace, function() {
-        //             self._resetSession.call(self, true);
-        //         }).on('keyup' + this._eventNamespace, function() {
-        //             self._resetSession.call(self, true);
-        //         });
-        //     }
-        // },
-        // _stopTrackingEvents: function() {
-        //     if (this.options.resetOnActivity) {
-        //         this._$document.off(this._eventNamespace);
-        //     }
-        // },
+        _startTracking: function() {
+            this._$document.on('click' + this._eventNamespace, $.proxy(this._trackActivityHandler, this)).on('keyup' + this._eventNamespace, $.proxy(this._trackActivityHandler, this));
+            this._trackActivityHandler();
+            this._activityInterval = setInterval($.proxy(function() {
+                this._isIdle = Math.round((new Date().getTime() - this._lastActivity)/1000) >= this.options.activityTimeout;
+            }, this), this.options.activityInterval);
+        },
+        _stopTracking: function() {
+            this._$document.off(this._eventNamespace);
+            if (this._activityInterval) {
+                clearInterval(this._activityInterval);
+            }
+        },
         _clearTimers: function() {
             if (this._countDownInterval) {
                 clearInterval(this._countDownInterval);
@@ -130,11 +136,12 @@
             this._trigger('extendSession', this);
             this._resetSession();
         },
-        _resetSession: function(fromTracking) {
+        _resetSession: function() {
+            this._resetCookie();
             this._clearTimers();
-            this._mainTimeout = setTimeout($.proxy(function() {
-                this._showWarning.call(this);
-            }, this), this.options.timeoutInterval);
+            // this._mainTimeout = setTimeout($.proxy(function() {
+            //     this._showWarning.call(this);
+            // }, this), this.options.timeoutInterval);
             // if (!fromTracking) {
             //     this._hideTimeout();
             //     this._stopTrackingEvents();
@@ -142,19 +149,13 @@
             // }
         },
         _startSync: function() {
-            var cookie = this._cookie('multiTabSync');
-            if (!cookie || !$.isPlainObject(cookie)) {
-                cookie = {
-                    expired: false
-                };
-            }
-            this._cookie('multiTabSync', cookie);
+            this._resetCookie();
             this._syncInterval = setInterval($.proxy(function() {
                 var tmp = this._cookie('multiTabSync');
                 if (tmp.expired) {
                     this._expireAndRedirect();
+                } else if (tmp.showing) {
                 }
-                // console.log(this._cookie('multiTabSync'));
             }, this), 1000);
         },
         /*   _      __              _
@@ -164,7 +165,7 @@
                                         /___/
         */
         _showWarning: function() {
-            // this._stopTrackingEvents();
+            this._stopTracking();
             var tick = this.options.countDownTimeout;
             if (this.options.countDownElement) {
                 this.options.countDownElement.text(tick);
@@ -212,6 +213,7 @@
             }
             $.ui.dialog.prototype._create.call(this, this.options);
             this.element.parents('div.ui-dialog').find('div.ui-dialog-titlebar .ui-dialog-titlebar-close').hide();
+            this._startTracking();
             if (this.options.multiTabSync) {
                 this._startSync();
             }
