@@ -22,7 +22,6 @@
     $.widget('ui.sessiondialog', $.ui.dialog, {
         options: {
             url: null, //The url to redirect to on timeout.
-            timeoutInterval: 1800000, //Time in MS to wait until the dialog is shown.
             countDownTimeout: 20, //How many seconds to countdown.
             countDownElement: null, //The element where the countdown text will be rendered.
             resetOnActivity: false, //Reset on mouse/keyboard activity?
@@ -33,15 +32,17 @@
                 domain: null,
                 secure: false
             },
-            activityInterval: 2000,
+            timeoutSeconds: 30, //The number of seconds before the timeout warning should be showing to an inactive user.
             activityTimeout: 15 //The number of seconds between detected activity before the user is considered inactive.
         },
-        _mainTimeout: null, _countDownInterval: null, _syncInterval: null, _activityInterval: null, _lastActivity: null, _isIdle: false,
+        _countDownInterval: null, _tickInterval: null, _tick: 0,
+        _isShowing: false, _isIdle: false, _lastActivity: null,
         _$document: $(document), _eventNamespace: '.sessUsrEvents' + Math.floor(Math.random() * 100),
-        /*    _____          __    _       __  ___    __  __           __
-             / ___/__  ___  / /__ (_)__   /  |/  /__ / /_/ /  ___  ___/ /__
-            / /__/ _ \/ _ \/  '_// / -_) / /|_/ / -_) __/ _ \/ _ \/ _  (_-<
-            \___/\___/\___/_/\_\/_/\__/ /_/  /_/\__/\__/_//_/\___/\_,_/___/
+        /*    _____          __    _       __             _
+             / ___/__  ___  / /__ (_)__   / /  ___  ___ _(_)___
+            / /__/ _ \/ _ \/  '_// / -_) / /__/ _ \/ _ `/ / __/
+            \___/\___/\___/_/\_\/_/\__/ /____/\___/\_, /_/\__/
+                                                  /___/
         */
         _cookie: function(n, v) {
             if (v !== undefined) {
@@ -76,69 +77,118 @@
                 }
             }
         },
-        /*   ______             __    _             ____              __    __ __             ____
-            /_  __/______ _____/ /__ (_)__  ___ _  / __/  _____ ___  / /_  / // /__ ____  ___/ / /__ ____
-             / / / __/ _ `/ __/  '_// / _ \/ _ `/ / _/| |/ / -_) _ \/ __/ / _  / _ `/ _ \/ _  / / -_) __/
-            /_/ /_/  \_,_/\__/_/\_\/_/_//_/\_, / /___/|___/\__/_//_/\__/ /_//_/\_,_/_//_/\_,_/_/\__/_/
+        /*   ______             __    _               __  _______     __     __ __             ____
+            /_  __/______ _____/ /__ (_)__  ___ _   _/_/ /_  __(_)___/ /__  / // /__ ____  ___/ / /__ _______
+             / / / __/ _ `/ __/  '_// / _ \/ _ `/ _/_/    / / / / __/  '_/ / _  / _ `/ _ \/ _  / / -_) __(_-<
+            /_/ /_/  \_,_/\__/_/\_\/_/_//_/\_, / /_/     /_/ /_/\__/_/\_\ /_//_/\_,_/_//_/\_,_/_/\__/_/ /___/
                                           /___/
         */
         _trackActivityHandler: function() {
             this._lastActivity = new Date().getTime();
+        },
+        _tickHandler: function() {
+            //Set _isIdle, depending on the amount of seconds since their last click/keyup.
+            this._isIdle = Math.round((new Date().getTime() - this._lastActivity) / 1000) >= this.options.activityTimeout;
+
+            var cookie = this.options.multiTabSync ? this._cookie('multiTabSync') : {};
+            if (!this._isIdle && cookie.showing && !this._isShowing) {
+                //We're not idle, but some other tab is showing... extend the session to avoid this.
+                this._extendSession(true);
+                return;
+            }
+
+            // var otherTabShowing = false, syncCookie = {};
+            // if (this.options.multiTabSync) {
+            //     syncCookie = this._cookie('multiTabSync');
+            //     if (syncCookie.expired) {
+            //         this._expireAndRedirect();
+            //         return;
+            //     } else if (syncCookie.extended) {
+            //         this._extendSession(true);
+            //         return;
+            //     } else {
+            //         otherTabShowing = syncCookie.showing;
+            //     }
+            // }
+
+            //If the current tick + 1 is more than or equal to the timeout we're after...
+            if (this._tick + 1 >= this.options.timeoutSeconds) {
+                //If the user has not been idle long enough, and we're resetting on activity... then extend the session. Otherwise, show the warning.
+                if (!this._isIdle && this.options.resetOnActivity) {
+                    this._extendSession(true);
+                } else if (!this._isShowing) {
+                    this._isShowing = true;
+                    if (this.options.multiTabSync) {
+                        cookie.showing = true;
+                        this._cookie('multiTabSync', cookie);
+                    }
+                    this._stopTracking();
+                    this._showCountDown();
+                }
+            } else {
+                this._tick++;
+            }
         },
         /*     __  ___    __  __           __
               /  |/  /__ / /_/ /  ___  ___/ /__
              / /|_/ / -_) __/ _ \/ _ \/ _  (_-<
             /_/  /_/\__/\__/_//_/\___/\_,_/___/
         */
-        _resetCookie: function() {
-            this._cookie('multiTabSync', {
-                expired: false,
-                showing: false
-            });
-        },
-        _expireAndRedirect: function() {
-            if (this.options.multiTabSync && this._syncInterval) {
-                clearInterval(this._syncInterval);
+        _extendSession: function(fromTick) {
+            this._clearTimers();
+            this._isShowing = false;
+            if (this.options.multiTabSync) {
+                this._cookie('multiTabSync', $.extend({ showing: false }, this._cookie('multiTabSync')));
             }
-            this._cookie('multiTabSync', { expired: true });
+            if (!fromTick) {
+                this._startTracking();
+            }
+            this._startTick();
+            this._trigger('extendSession', this);
+        },
+        // _resetCookie: function() {
+            // var temp = {
+                // expired: false,
+                // showing: false,
+                // extended: extend||false
+            // };
+            // this._cookie('multiTabSync', temp);
+            // if (extend) {
+            //     setTimeout($.proxy(function(obj) {
+            //         obj.extended = false;
+            //         this._cookie('multiTabSync', obj);
+            //     }, this, temp), 1000);
+            // }
+        // },
+        _expireAndRedirect: function() {
+            if (this.options.multiTabSync) {
+                this._cookie('multiTabSync', { expired: true });
+            }
             this._clearTimers();
             this._stopTracking();
+            console.log('REDIRECT');
             if (this.options.url) {
                 // window.location.replace(this.options.url);
             }
         },
-        // _hideTimeout: function() {
-        //     this._trigger('hideTimeoutWarning', this);
-        //     this.close();
-        // },
         _startTracking: function() {
             this._$document.on('click' + this._eventNamespace, $.proxy(this._trackActivityHandler, this)).on('keyup' + this._eventNamespace, $.proxy(this._trackActivityHandler, this));
             this._trackActivityHandler();
-            this._activityInterval = setInterval($.proxy(function() {
-                this._isIdle = Math.round((new Date().getTime() - this._lastActivity)/1000) >= this.options.activityTimeout;
-            }, this), this.options.activityInterval);
         },
         _stopTracking: function() {
             this._$document.off(this._eventNamespace);
-            if (this._activityInterval) {
-                clearInterval(this._activityInterval);
-            }
         },
         _clearTimers: function() {
             if (this._countDownInterval) {
                 clearInterval(this._countDownInterval);
             }
-            if (this._mainTimeout) {
-                clearTimeout(this._mainTimeout);
+            if (this._tickInterval) {
+                clearInterval(this._tickInterval);
             }
         },
-        _extendSession: function() {
-            this._trigger('extendSession', this);
-            this._resetSession();
-        },
-        _resetSession: function() {
-            this._resetCookie();
-            this._clearTimers();
+        // _resetSession: function(extend) {
+            // this._resetCookie(extend);
+            // this._clearTimers();
             // this._mainTimeout = setTimeout($.proxy(function() {
             //     this._showWarning.call(this);
             // }, this), this.options.timeoutInterval);
@@ -147,16 +197,21 @@
             //     this._stopTrackingEvents();
             //     this._setTrackingEvents();
             // }
-        },
-        _startSync: function() {
-            this._resetCookie();
-            this._syncInterval = setInterval($.proxy(function() {
-                var tmp = this._cookie('multiTabSync');
-                if (tmp.expired) {
-                    this._expireAndRedirect();
-                } else if (tmp.showing) {
-                }
-            }, this), 1000);
+        // },
+        // _startSync: function() {
+            // this._resetCookie();
+            // this._syncInterval = setInterval($.proxy(function() {
+            //     var tmp = this._cookie('multiTabSync');
+            //     if (tmp.expired) {
+            //         this._expireAndRedirect();
+            //     } else if (tmp.extended) {
+            //     }
+            // }, this), 1000);
+        // },
+        _startTick: function() {
+            this._tick = 0;
+            this._clearTimers();
+            this._tickInterval = setInterval($.proxy(this._tickHandler, this), 1000);
         },
         /*   _      __              _
             | | /| / /__ ________  (_)__  ___ _
@@ -164,8 +219,8 @@
             |__/|__/\_,_/_/ /_//_/_/_//_/\_, /
                                         /___/
         */
-        _showWarning: function() {
-            this._stopTracking();
+        _showCountDown: function() {
+            // this._cookie('multiTabSync', $.extend({ showing: true }, this._cookie('multiTabSync')));
             var tick = this.options.countDownTimeout;
             if (this.options.countDownElement) {
                 this.options.countDownElement.text(tick);
@@ -178,7 +233,6 @@
                     this._trigger('sessionTimeout', this);
                     this.close();
                     this._expireAndRedirect();
-                    this._resetSession();
                 }
                 tick--;
                 if (this.options.countDownElement) {
@@ -214,10 +268,14 @@
             $.ui.dialog.prototype._create.call(this, this.options);
             this.element.parents('div.ui-dialog').find('div.ui-dialog-titlebar .ui-dialog-titlebar-close').hide();
             this._startTracking();
+            this._startTick();
             if (this.options.multiTabSync) {
-                this._startSync();
+                this._cookie('multiTabSync', {
+                    showing: false,
+                    expired: false,
+                    extended: false
+                });
             }
-            this._resetSession();
             return this;
         }
     });
