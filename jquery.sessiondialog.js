@@ -24,7 +24,8 @@
             url: null, //The url to redirect to on timeout.
             countDownTimeout: 20, //How many seconds to countdown.
             countDownElement: null, //The element where the countdown text will be rendered.
-            resetOnActivity: false, //Reset on mouse/keyboard activity?
+            resetOnActivity: false, //Reset on mouse click or key up activity in the document.
+            windowFocusIsActivity: true, //If true, focus on the tab/window is considered activity.
             multiTabSync: true, //Use a cookie to track activity on other tabs, to avoid timing out on one while active in another in the same session.
             syncCookie: {
                 expires: null,
@@ -35,14 +36,12 @@
             timeoutSeconds: 30, //The number of seconds before the timeout warning should be showing to an inactive user.
             activityTimeout: 15 //The number of seconds between detected activity before the user is considered inactive.
         },
-        _countDownInterval: null, _tickInterval: null, _tick: 0,
-        _isShowing: false, _isIdle: false, _lastActivity: null,
-        _$document: $(document), _eventNamespace: '.sessUsrEvents' + Math.floor(Math.random() * 100),
-        /*    _____          __    _       __             _
-             / ___/__  ___  / /__ (_)__   / /  ___  ___ _(_)___
-            / /__/ _ \/ _ \/  '_// / -_) / /__/ _ \/ _ `/ / __/
-            \___/\___/\___/_/\_\/_/\__/ /____/\___/\_, /_/\__/
-                                                  /___/
+        _$window: $(window), _$document: $(document), _eventNamespace: '.sessUsrEvents' + Math.floor(Math.random() * 100),
+        _countDownInterval: null, _tickInterval: null, _tick: 0, _isShowing: false, _isIdle: false, _lastActivity: null,
+        /*     __  ___    __  __           __
+              /  |/  /__ / /_/ /  ___  ___/ /__
+             / /|_/ / -_) __/ _ \/ _ \/ _  (_-<
+            /_/  /_/\__/\__/_//_/\___/\_,_/___/
         */
         _cookie: function(n, v) {
             if (v !== undefined) {
@@ -77,6 +76,79 @@
                 }
             }
         },
+        _resetSession: function() {
+            this._tick = 0;
+            if (this._isShowing) {
+                if (this.options.multiTabSync) {
+                    this._cookie('multiTabSync', $.extend({ showing: false }, this._cookie('multiTabSync')));
+                }
+                this.close();
+                this._isShowing = false;
+                this._startTracking();
+            }
+        },
+        _extendSession: function(fromDialog) {
+            if (this.options.multiTabSync) {
+                this._cookie('multiTabSync', $.extend({ showing: false, extended: true }, this._cookie('multiTabSync')));
+                setTimeout($.proxy(function() {
+                    this._cookie('multiTabSync', $.extend({ extended: false }, this._cookie('multiTabSync')));
+                }, this), 1000);
+            }
+            if (fromDialog) {
+                this.close();
+                this._isShowing = false;
+                this._startTracking();
+            }
+            this._trigger('extendSession', this);
+        },
+        _expireAndRedirect: function() {
+            //Clear the times and stop tracking events.
+            this._clearTimers();
+            this._stopTracking();
+            //Close the dialog if we need to.
+            this.close();
+            //We're syncing multiple tabs, so save the cookie with expired set to true for the others to pickup.
+            if (this.options.multiTabSync) {
+                this._cookie('multiTabSync', { expired: true });
+            }
+            //Trigger the event.
+            this._trigger('sessionTimeout', this);
+            //Redirect if possible.
+            if (this.options.url) {
+                console.log('REDIRECT');
+                // window.location.replace(this.options.url);
+            }
+        },
+        _startTracking: function() {
+            //If we're allowed to consider a window/tab focus as user activity... hook it up.
+            if (this.options.windowFocusIsActivity) {
+                this._$window.on('focus' + this._eventNamespace, $.proxy(this._trackActivityHandler, this));
+            }
+            //Hook up click/keyup events as activity triggers.
+            this._$document.on('click' + this._eventNamespace, $.proxy(this._trackActivityHandler, this)).on('keyup' + this._eventNamespace, $.proxy(this._trackActivityHandler, this));
+            //Fire the tracking handler at least once to store the current time since hitting this point is considered activity.
+            this._trackActivityHandler();
+        },
+        _stopTracking: function() {
+            //Kill our event namespaces for tracking.
+            this._$document.off(this._eventNamespace);
+            this._$window.off(this._eventNamespace);
+        },
+        _clearTimers: function() {
+            //Stop the count down interval if possible.
+            if (this._countDownInterval) {
+                clearInterval(this._countDownInterval);
+            }
+            //Stop the tick interval if possible.
+            if (this._tickInterval) {
+                clearInterval(this._tickInterval);
+            }
+        },
+        _startTick: function() {
+            //Reset the tick count, and create a new tick interval.
+            this._tick = 0;
+            this._tickInterval = setInterval($.proxy(this._tickHandler, this), 1000);
+        },
         /*   ______             __    _               __  _______     __     __ __             ____
             /_  __/______ _____/ /__ (_)__  ___ _   _/_/ /_  __(_)___/ /__  / // /__ ____  ___/ / /__ _______
              / / / __/ _ `/ __/  '_// / _ \/ _ `/ _/_/    / / / / __/  '_/ / _  / _ `/ _ \/ _  / / -_) __(_-<
@@ -89,129 +161,43 @@
         _tickHandler: function() {
             //Set _isIdle, depending on the amount of seconds since their last click/keyup.
             this._isIdle = Math.round((new Date().getTime() - this._lastActivity) / 1000) >= this.options.activityTimeout;
-
-            var cookie = this.options.multiTabSync ? this._cookie('multiTabSync') : {};
-            if (!this._isIdle && cookie.showing && !this._isShowing) {
-                //We're not idle, but some other tab is showing... extend the session to avoid this.
-                this._extendSession(true);
-                return;
+            if (this.options.multiTabSync) {
+                var cookie = this._cookie('multiTabSync');
+                if (cookie.expired) {
+                    console.log('SOMEONE EXPIRED');
+                    this._expireAndRedirect();
+                    return;
+                } else if (cookie.extended) {
+                    console.log('SOMEONE EXTENDED');
+                    this._extendSession();
+                    return;
+                } else if (cookie.showing && !this._isShowing && !this._isIdle) {
+                    //Someone else is showing the dialog, but we're not idle yet.
+                    console.log('EXTENDING... someone prematurely started counting down.');
+                    this._extendSession();
+                    return;
+                } else if (!cookie.showing && this._isShowing) {
+                    console.log('SHOWING BIT FLIPPED... RESETTING');
+                    this._resetSession();
+                    return;
+                }
             }
 
-            // var otherTabShowing = false, syncCookie = {};
-            // if (this.options.multiTabSync) {
-            //     syncCookie = this._cookie('multiTabSync');
-            //     if (syncCookie.expired) {
-            //         this._expireAndRedirect();
-            //         return;
-            //     } else if (syncCookie.extended) {
-            //         this._extendSession(true);
-            //         return;
-            //     } else {
-            //         otherTabShowing = syncCookie.showing;
-            //     }
-            // }
-
-            //If the current tick + 1 is more than or equal to the timeout we're after...
-            if (this._tick + 1 >= this.options.timeoutSeconds) {
-                //If the user has not been idle long enough, and we're resetting on activity... then extend the session. Otherwise, show the warning.
+            //Have we timed out?
+            if (this._tick+1 >= this.options.timeoutSeconds && !this._isShowing) {
                 if (!this._isIdle && this.options.resetOnActivity) {
-                    this._extendSession(true);
-                } else if (!this._isShowing) {
-                    this._isShowing = true;
-                    if (this.options.multiTabSync) {
-                        cookie.showing = true;
-                        this._cookie('multiTabSync', cookie);
-                    }
-                    this._stopTracking();
+                    //We're NOT idle so reset the activity.
+                    console.log('ACTIVITY RESET');
+                    this._extendSession();
+                } else if (this._isIdle) {
+                    //We're idle, so show the warning.
+                    console.log('SHOWING');
                     this._showCountDown();
                 }
             } else {
+                //Nope... increment.
                 this._tick++;
             }
-        },
-        /*     __  ___    __  __           __
-              /  |/  /__ / /_/ /  ___  ___/ /__
-             / /|_/ / -_) __/ _ \/ _ \/ _  (_-<
-            /_/  /_/\__/\__/_//_/\___/\_,_/___/
-        */
-        _extendSession: function(fromTick) {
-            this._clearTimers();
-            this._isShowing = false;
-            if (this.options.multiTabSync) {
-                this._cookie('multiTabSync', $.extend({ showing: false }, this._cookie('multiTabSync')));
-            }
-            if (!fromTick) {
-                this._startTracking();
-            }
-            this._startTick();
-            this._trigger('extendSession', this);
-        },
-        // _resetCookie: function() {
-            // var temp = {
-                // expired: false,
-                // showing: false,
-                // extended: extend||false
-            // };
-            // this._cookie('multiTabSync', temp);
-            // if (extend) {
-            //     setTimeout($.proxy(function(obj) {
-            //         obj.extended = false;
-            //         this._cookie('multiTabSync', obj);
-            //     }, this, temp), 1000);
-            // }
-        // },
-        _expireAndRedirect: function() {
-            if (this.options.multiTabSync) {
-                this._cookie('multiTabSync', { expired: true });
-            }
-            this._clearTimers();
-            this._stopTracking();
-            console.log('REDIRECT');
-            if (this.options.url) {
-                // window.location.replace(this.options.url);
-            }
-        },
-        _startTracking: function() {
-            this._$document.on('click' + this._eventNamespace, $.proxy(this._trackActivityHandler, this)).on('keyup' + this._eventNamespace, $.proxy(this._trackActivityHandler, this));
-            this._trackActivityHandler();
-        },
-        _stopTracking: function() {
-            this._$document.off(this._eventNamespace);
-        },
-        _clearTimers: function() {
-            if (this._countDownInterval) {
-                clearInterval(this._countDownInterval);
-            }
-            if (this._tickInterval) {
-                clearInterval(this._tickInterval);
-            }
-        },
-        // _resetSession: function(extend) {
-            // this._resetCookie(extend);
-            // this._clearTimers();
-            // this._mainTimeout = setTimeout($.proxy(function() {
-            //     this._showWarning.call(this);
-            // }, this), this.options.timeoutInterval);
-            // if (!fromTracking) {
-            //     this._hideTimeout();
-            //     this._stopTrackingEvents();
-            //     this._setTrackingEvents();
-            // }
-        // },
-        // _startSync: function() {
-            // this._resetCookie();
-            // this._syncInterval = setInterval($.proxy(function() {
-            //     var tmp = this._cookie('multiTabSync');
-            //     if (tmp.expired) {
-            //         this._expireAndRedirect();
-            //     } else if (tmp.extended) {
-            //     }
-            // }, this), 1000);
-        // },
-        _startTick: function() {
-            this._tick = 0;
-            this._clearTimers();
-            this._tickInterval = setInterval($.proxy(this._tickHandler, this), 1000);
         },
         /*   _      __              _
             | | /| / /__ ________  (_)__  ___ _
@@ -220,21 +206,33 @@
                                         /___/
         */
         _showCountDown: function() {
-            // this._cookie('multiTabSync', $.extend({ showing: true }, this._cookie('multiTabSync')));
+            //Stop all tracking so we don't reset ourself if the user sees it in time to interact.
+            this._stopTracking();
+            //Mark as dialog showing.
+            this._isShowing = true;
+            if (this.options.multiTabSync) {
+                console.log('SAVING COOKIE AS SHOWING');
+                this._cookie('multiTabSync', $.extend({ showing: true }, this._cookie('multiTabSync')));
+            }
+            //Get the total amount for the count down.
             var tick = this.options.countDownTimeout;
+            //Update the count down element with it if possible.
             if (this.options.countDownElement) {
                 this.options.countDownElement.text(tick);
             }
+            //Trigger the event that we're showing the warning.
             this._trigger('showTimeoutWarning', this);
+            //Open the dialog, and start the count down interval.
             this.open();
             this._countDownInterval = setInterval($.proxy(function() {
+                //If the tick is less than or zero...
                 if (tick <= 0) {
                     clearInterval(this._countDownInterval);
-                    this._trigger('sessionTimeout', this);
-                    this.close();
                     this._expireAndRedirect();
                 }
+                //Decrease the tick count by 1.
                 tick--;
+                //Set the element to the new count, if possible.
                 if (this.options.countDownElement) {
                     this.options.countDownElement.text(tick);
                 }
@@ -247,28 +245,40 @@
         */
         _create: function() {
             var self = this, extendButton = null;
+            //If there are some buttons defined... try to find the extend button.
             if (this.options.buttons) {
+                //Loop the buttons, and try to find one with the "extendTime" property that's true.
                 for(var i in this.options.buttons) {
                     if (this.options.buttons[i].hasOwnProperty('extendTime') && this.options.buttons[i].extendTime) {
                         extendButton = this.options.buttons[i];
                         break;
                     }
                 }
+                //If we found it, start hijacking it... otherwise, throw an error.
                 if (extendButton) {
-                    if (extendButton.hasOwnProperty('click')) {
-                        extendButton.click = $.proxy(function(handler) {
-                            this._extendSession();
+                    //Hook up a click handler for extending the time, but pass in the existing click handler just in case they bound to it.
+                    extendButton.click = $.proxy(function(handler) {
+                        //Extend the session.
+                        this._extendSession(true);
+                        //If their is a handler, and it's a function... fire it with the expected dialog content.
+                        if (handler && $.isFunction(handler)) {
                             handler.call(this.element[0]);
-                        }, this, extendButton.click);
-                    }
+                        }
+                    }, this, extendButton.click);
                 } else {
                     throw 'No button found with the extendTime option.';
                 }
             }
+            //Disabled autoOpen and closeOnEscape.
+            this.options.autoOpen = false;
+            this.options.closeOnEscape = false;
+            //Create the dialog.
             $.ui.dialog.prototype._create.call(this, this.options);
+            //Kill the close icone.
             this.element.parents('div.ui-dialog').find('div.ui-dialog-titlebar .ui-dialog-titlebar-close').hide();
+            //Start the tracking events.
             this._startTracking();
-            this._startTick();
+            //If we're handling multiple tabs, then set the cookies defaults.
             if (this.options.multiTabSync) {
                 this._cookie('multiTabSync', {
                     showing: false,
@@ -276,6 +286,9 @@
                     extended: false
                 });
             }
+            //Start the tick interval.
+            this._startTick();
+            //Return our instance.
             return this;
         }
     });
