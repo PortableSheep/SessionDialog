@@ -76,35 +76,33 @@
                 }
             }
         },
-        _resetSession: function() {
-            this._tick = 0;
+        _extendSession: function() {
+            this._selfExtend = true;
+            this._clearTimers();
             if (this._isShowing) {
-                if (this.options.multiTabSync) {
-                    this._cookie('multiTabSync', $.extend({ showing: false }, this._cookie('multiTabSync')));
-                }
                 this.close();
                 this._isShowing = false;
                 this._startTracking();
+                //We're showing our dialog... so we need to fire the event ourselves.
+                this._trigger('extendSession', this);
             }
-        },
-        _extendSession: function(fromDialog) {
             if (this.options.multiTabSync) {
-                this._cookie('multiTabSync', $.extend({ showing: false, extended: true }, this._cookie('multiTabSync')));
+                this._currentCookie.showing = false;
+                this._currentCookie.extended = true;
+                this._saveCookie();
                 setTimeout($.proxy(function() {
-                    this._cookie('multiTabSync', $.extend({ extended: false }, this._cookie('multiTabSync')));
+                    this._currentCookie.extended = false;
+                    this._saveCookie();
                 }, this), 1000);
             }
-            if (fromDialog) {
-                this.close();
-                this._isShowing = false;
-                this._startTracking();
-            }
-            this._trigger('extendSession', this);
+            this._selfExtend = false;
+            this._startTick();
         },
         _expireAndRedirect: function() {
             //Clear the times and stop tracking events.
             this._clearTimers();
             this._stopTracking();
+            this._stopSync();
             //Close the dialog if we need to.
             this.close();
             //We're syncing multiple tabs, so save the cookie with expired set to true for the others to pickup.
@@ -149,6 +147,21 @@
             this._tick = 0;
             this._tickInterval = setInterval($.proxy(this._tickHandler, this), 1000);
         },
+        _startSync: function() {
+            this._syncInterval = setInterval($.proxy(this._syncTickHandler, this), 1050);
+        },
+        _stopSync: function() {
+            if (this._syncInterval) {
+                clearInterval(this._syncInterval);
+            }
+        },
+        _getCookie: function() {
+            return this._cookie('multiTabSync');
+        },
+        _saveCookie: function() {
+            this._currentCookie.auth = this._eventNamespace;
+            this._cookie('multiTabSync', this._currentCookie);
+        },
         /*   ______             __    _               __  _______     __     __ __             ____
             /_  __/______ _____/ /__ (_)__  ___ _   _/_/ /_  __(_)___/ /__  / // /__ ____  ___/ / /__ _______
              / / / __/ _ `/ __/  '_// / _ \/ _ `/ _/_/    / / / / __/  '_/ / _  / _ `/ _ \/ _  / / -_) __(_-<
@@ -158,31 +171,39 @@
         _trackActivityHandler: function() {
             this._lastActivity = new Date().getTime();
         },
-        _tickHandler: function() {
-            //Set _isIdle, depending on the amount of seconds since their last click/keyup.
-            this._isIdle = Math.round((new Date().getTime() - this._lastActivity) / 1000) >= this.options.activityTimeout;
+        _currentCookie: {},
+        _syncTickHandler: function() {
             if (this.options.multiTabSync) {
-                var cookie = this._cookie('multiTabSync');
-                if (cookie.expired) {
-                    console.log('SOMEONE EXPIRED');
-                    this._expireAndRedirect();
-                    return;
-                } else if (cookie.extended) {
-                    console.log('SOMEONE EXTENDED');
-                    this._extendSession();
-                    return;
-                } else if (cookie.showing && !this._isShowing && !this._isIdle) {
-                    //Someone else is showing the dialog, but we're not idle yet.
-                    console.log('EXTENDING... someone prematurely started counting down.');
-                    this._extendSession();
-                    return;
-                } else if (!cookie.showing && this._isShowing) {
-                    console.log('SHOWING BIT FLIPPED... RESETTING');
-                    this._resetSession();
-                    return;
+                this._currentCookie = this._getCookie();;
+                if (this._currentCookie.auth !== this._eventNamespace) {
+                    if (this._currentCookie.expired) {
+                        console.log('SOMEONE EXPIRED');
+                        this._expireAndRedirect();
+                        return;
+                    } else if (this._currentCookie.extended && !this._isShowing) {
+                        console.log('SOMEONE EXTENDED');
+                        this._extendSession();
+                        return;
+                    } else if (this._currentCookie.showing && !this._isShowing && !this._isIdle) {
+                        //Someone else is showing the dialog, but we're not idle yet.
+                        console.log('EXTENDING... someone prematurely started counting down.');
+                        this._extendSession();
+                        return;
+                    } else if (!this._currentCookie.showing && this._isShowing) {
+                        console.log('SHOWING BIT FLIPPED... RESETTING');
+                        this._extendSession(true);
+                        return;
+                    }
                 }
             }
-
+        },
+        _tickHandler: function() {
+            this._oldIdle = this._isIdle;
+            //Set _isIdle, depending on the amount of seconds since their last click/keyup.
+            this._isIdle = Math.round((new Date().getTime() - this._lastActivity) / 1000) >= this.options.activityTimeout;
+            if (this._oldIdle && !this._isIdle) {
+                this._saveCookie();
+            }
             //Have we timed out?
             if (this._tick+1 >= this.options.timeoutSeconds && !this._isShowing) {
                 if (!this._isIdle && this.options.resetOnActivity) {
@@ -190,8 +211,20 @@
                     console.log('ACTIVITY RESET');
                     this._extendSession();
                 } else if (this._isIdle) {
-                    //We're idle, so show the warning.
+                    if (this.options.multiTabSync && this._currentCookie.showing) {
+                        return;
+                    }
+                    // We're idle, so show the warning.
                     console.log('SHOWING');
+                    //Stop all tracking so we don't reset ourself if the user sees it in time to interact.
+                    this._stopTracking();
+                    //Mark as dialog showing.
+                    this._isShowing = true;
+                    if (this.options.multiTabSync) {
+                        console.log('SAVING COOKIE AS SHOWING');
+                        this._currentCookie.showing = true;
+                        this._saveCookie();
+                    }
                     this._showCountDown();
                 }
             } else {
@@ -206,14 +239,6 @@
                                         /___/
         */
         _showCountDown: function() {
-            //Stop all tracking so we don't reset ourself if the user sees it in time to interact.
-            this._stopTracking();
-            //Mark as dialog showing.
-            this._isShowing = true;
-            if (this.options.multiTabSync) {
-                console.log('SAVING COOKIE AS SHOWING');
-                this._cookie('multiTabSync', $.extend({ showing: true }, this._cookie('multiTabSync')));
-            }
             //Get the total amount for the count down.
             var tick = this.options.countDownTimeout;
             //Update the count down element with it if possible.
@@ -259,7 +284,7 @@
                     //Hook up a click handler for extending the time, but pass in the existing click handler just in case they bound to it.
                     extendButton.click = $.proxy(function(handler) {
                         //Extend the session.
-                        this._extendSession(true);
+                        this._extendSession();
                         //If their is a handler, and it's a function... fire it with the expected dialog content.
                         if (handler && $.isFunction(handler)) {
                             handler.call(this.element[0]);
@@ -280,12 +305,11 @@
             this._startTracking();
             //If we're handling multiple tabs, then set the cookies defaults.
             if (this.options.multiTabSync) {
-                this._cookie('multiTabSync', {
-                    showing: false,
-                    expired: false,
-                    extended: false
-                });
+                this._currentCookie = { showing: false, expired: false, extended: false };
+                this._saveCookie();
             }
+            //Start the sync interval.
+            this._startSync();
             //Start the tick interval.
             this._startTick();
             //Return our instance.
